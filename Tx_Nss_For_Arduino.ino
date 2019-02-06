@@ -7,6 +7,8 @@
    \author </i> von Boduen. Special thanx to Andrew Rapp.
 */
 
+// Version 0.9
+
 #include <MBee.h>
 #include <SoftwareSerial.h>
 
