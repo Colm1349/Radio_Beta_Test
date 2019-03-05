@@ -9,6 +9,7 @@
 
 #include <MBee.h>
 #include <SoftwareSerial.h>
+#include <avr/wdt.h>
 
 /**
     Скетч предназначен для демонстрации приема пакетов с неструктурированными данными от удаленного модема.
@@ -64,11 +65,11 @@
 #define Max_SpeedValue 225
 #define Min_SpeedValue -225
 #define PWM_Pin 11
+#define LedLimited 4
 #define systemLed 5
 #define ForwardLed 6
 #define BackwardLed 7
-
-
+#define BUZZER_PIN 10
 
 int SpeedValue_Now = ZeroPWM; // stop command
 int Step_For_Move = 0;
@@ -81,15 +82,83 @@ TxStatusResponse txStatus = TxStatusResponse(); //Локальный ответ 
 RxAcknowledgeResponse remoteRxStatus = RxAcknowledgeResponse(); //Пакет с подтверждением от удаленного модема получение данных.
 int errorLed = 11;
 int statusLed = LED_BUILTIN; //Используется встроенный в Вашу плату Arduino светодиод.
+
 int Permission_Of_Move = 2; // orange wire - debug
 int Direction_Of_Move = 3; // yellow wire - debug 111
 //int statusLed = 12;
 int InputValue = 0;
+int CounterOfPacketsFromTx = 0;
 uint8_t option = 0;
 uint8_t data = 0;
 uint8_t ssRX = 8;
 uint8_t ssTX = 9;
+int cntr = 0;
+int E1 = 0; // Failed Checksum
+int E2 = 0; // Wrong length of RX packet
+int E3 = 0; // Not correct Start byte
+int E4 = 0; // Corrupted frame
+int ErrorSum = 0;
+int ChainComboErrors = 0;
+bool WDT_ACTIVE = false;
+bool AlarmTrigger = false;
+int GoodRx = 0;
+double KoefGood = 0;
 SoftwareSerial nss(ssRX, ssTX);
+
+//Обработка прерывания по переполнению счётчика. Должны пищалкой пищать
+ISR(TIMER2_OVF_vect) {
+  cli();
+  TCNT2 = 0; //55; Костыльное решение для изменения скорости моргания. ЛОЛ
+  cntr++;
+  if (cntr > 1000)
+  {
+    // ALARM
+    Alarm_ON();
+    if (WDT_ACTIVE == false)
+    {
+      wdt_enable(WDTO_4S); // WDT ENABLE!
+      WDT_ACTIVE = true;
+    }
+    cntr = 0;
+    digitalWrite(Direction_Of_Move  , LOW);
+    digitalWrite(Permission_Of_Move, LOW);
+    SpeedValue_Now = 0;
+    analogWrite(PWM_Pin , SpeedValue_Now);
+    // command stop.
+  }
+  sei();
+}
+
+void Reset_Error_Timer_And_Check_WDT()
+{
+  cli();
+  if (AlarmTrigger == true)
+  {
+    Alarm_OFF();
+    if (WDT_ACTIVE = true)
+    {
+      WDT_ACTIVE = false;
+      wdt_disable();           //TURN OFF WDT!
+    }
+  }
+  TCCR2B = 0b00000000;     // 0b00000000 -> STOP_TIMER (CS02 = CS01 = CS00 = 0)
+  TCNT2 = 0;  // обнуляем регистр счёта
+  TCCR2B = 0b00000011;     // 0b00000010 -> clk/8 (CS02 = 0 / CS01 = 1 / CS00 = 0)
+  cntr = 0;
+  sei();
+}
+
+void Alarm_ON()
+{
+  AlarmTrigger = true;
+  digitalWrite(BUZZER_PIN, HIGH);
+}
+
+void Alarm_OFF()
+{
+  AlarmTrigger = false;
+  digitalWrite(BUZZER_PIN, LOW);
+}
 
 void setup()
 {
@@ -97,26 +166,36 @@ void setup()
   pinMode(errorLed, OUTPUT);
   pinMode(Permission_Of_Move, OUTPUT);
   pinMode(Direction_Of_Move, OUTPUT);
-  PC_Debug.begin(9600);
-  MBee_Serial.begin(9600);
+  pinMode(LedLimited, OUTPUT);
+  PC_Debug.begin(115200); // 9600
+  MBee_Serial.begin(115200);
   mbee.begin(MBee_Serial);
 
   PC_Debug.println("Start_Debug!");
+  digitalWrite(LedLimited, LOW);
+
+  //Настройка таймера 2 (T2)
+  TCCR2A = 0;     // 0b00000000 -> Normal режим (никаких ШИМ) / Не ставили условий для ноги OC0A(12)
+  TCNT2 = 0;      // 0b00111011 -> Это просто регистр со значениями куда всё тикает. зачем там 59?
+  TIMSK2 = 0b00000001;  //0b00000001 - TOIE - до переполнения // ИЛИ -> TIMSK2 = 1; ИЛИ -> TIMSK2 |= (1 << TOIE2);
+  TCCR2B = 0b00000011;  // 0b00000010 -> clk/8 (CS02 / CS01 / CS00)
+
   delay(500); //Задержка не обязательна и вставлена для удобства работы с терминальной программой.
 }
 
 void loop()
 {
+  PC_Debug.println("---------------");
   //Receive message from picocom
   mbee.readPacket(); //Постоянно проверяем наличие данных от модема.
   if (mbee.getResponse().isAvailable())
   {
     PC_Debug.println("READED PACKET!!!");
-    // Print Data
-    //    PC_Debug.print("Data [0] -> ");
-    //    PC_Debug.println(rx.getDate()[0]);
+    ChainComboErrors = 0; // reset combo
     if (mbee.getResponse().getApiId() == RECEIVE_PACKET_API_FRAME || mbee.getResponse().getApiId() == RECEIVE_PACKET_NO_OPTIONS_API_FRAME) // 0x81==129 and 0x8F==143
     {
+      Reset_Error_Timer_And_Check_WDT();
+      Alarm_OFF();
       mbee.getResponse().getRxResponse(rx); //Получаем пакет с данными.
 
       //      Debug info
@@ -125,8 +204,8 @@ void loop()
       int8_t size = rx.getDataLength();
 
       //Debug
-      //bool WriteAllArrayFlag = false;
-      //Print_All_Array(size, WriteAllArrayFlag);
+      //      bool WriteAllArrayFlag = false;
+      //      Print_All_Array(size, WriteAllArrayFlag);
       //"WRITE" ALL PACKET
       //      if (rx.getDataLength() > 1)
       //      {
@@ -138,13 +217,22 @@ void loop()
       //        }
       //        PC_Debug.println();
       //      }
-
+      CounterOfPacketsFromTx = rx.getData()[8]; // 8ой байт номер пакета посланный с хоста (маркер)
+      PC_Debug.print("Counter Tx Packets :");
+      PC_Debug.println(CounterOfPacketsFromTx);
+      PC_Debug.println();
       InputValue = rx.getData()[9];  // 9ый байт наша команда (куда ехать)
       PC_Debug.print("Input Value:");
       PC_Debug.println(InputValue);
-      PC_Debug.println();
-
-
+      if (rx.getData()[10] == 170)
+      {
+        InputValue = Stop;
+        EmergencyStop();
+        PC_Debug.println("EMERGENCY STOP");
+        bool WriteAllArrayFlag = false;
+        Print_All_Array(size, WriteAllArrayFlag);
+        delay(100);
+      }
       // Wacth on this Value
       //      if (InputValue > 0 & InputValue < 100 )
       //      {
@@ -153,17 +241,18 @@ void loop()
       //        PC_Debug.println("RUSHER");
       //
       //      }
-
       //Processing input value
       Command_To_Motor(InputValue);
       //fix for cycle errors
       // HOW???
+      GoodRx = GoodRx + 1;
     }
     else
     {
-
       PC_Debug.println("Corrupted frame (maybe )");
-      delay(1000);
+      E4 = E4 + 1;
+      ChainComboErrors = ChainComboErrors + 1;
+      delay(100);
     }
     //      flashLed(errorLed, 1, 500); //Принят фрейм, не предназначенный для передачи неструктурированных данных.
   }
@@ -171,16 +260,57 @@ void loop()
   {
     PC_Debug.print("При разборе принятого пакета произошли ошибки.");
     PC_Debug.print(" № == ");
+    ChainComboErrors = ChainComboErrors + 1;
     PC_Debug.println(mbee.getResponse().getErrorCode());
+    switch (mbee.getResponse().getErrorCode())
+    {
+      case 1:
+        E1 = E1 + 1;
+        break;
+      case 2:
+        E2 = E2 + 1;
+        break;
+      case 3:
+        E3 = E3 + 1;
+        break;
+    }
+    //Debug Errored array
+    int8_t size = rx.getDataLength();
+    bool WriteAllArrayFlag = false;
+    Print_All_Array(size, WriteAllArrayFlag);
     //    flashLed(errorLed, 2, 100); //При разборе принятого пакета произошли ошибки.
   }
   // Send Message
-  //  tx.setRemoteAddress(remoteAddress);  //Устанавливаем адрес удаленного модема. // remoteAddress == 0x0001
-  //  tx.setPayload((uint8_t*)testString); //Устанавливаем указатель на тестовую строку.
-  //  tx.setPayloadLength(sizeof(testString) - 1); //Устанавливаем длину поля данных на 1 меньше, чем получаем по операции sizeof, чтобы не передавать терминирующий символ 0x00.
-  //  sendData();
+  //GOTO
+  if (ChainComboErrors >= 100 )
+  {
+    PC_Debug.println("RESET ARDUINO. A terrible long combo ERRORS !!!"); //RESET
+    WDT_ACTIVE = true;
+    wdt_enable(WDTO_15MS); // WDT ENABLE!
+    delay(50);
+  }
 
-  //  while(1);
+  PC_Debug.println("---------------");
+  PC_Debug.println("");
+  //  delay(2000);
+  ErrorSum = E1 + E2 + E3 + E4;
+  if (ErrorSum >= 500)
+  {
+    Alarm_ON();
+    PC_Debug.print("ErrorSum = ");
+    PC_Debug.println(ErrorSum);
+    PC_Debug.print("GoodRx = ");
+    PC_Debug.println(GoodRx);
+    PC_Debug.print("E1 = ");
+    PC_Debug.println(E1);
+    PC_Debug.print("E2 = ");
+    PC_Debug.println(E2);
+    PC_Debug.print("E3 = ");
+    PC_Debug.println(E3);
+    PC_Debug.print("E3 = ");
+    PC_Debug.println(E3);
+  }
+  //    while(1);
 }
 
 void Command_To_Motor(int instruction)
@@ -200,24 +330,27 @@ void Command_To_Motor(int instruction)
     }
     if (SpeedValue_Now > ZeroPWM)
     {
-      Step_For_Move = -1; // pull to zero
+      Step_For_Move = -4; // pull to zero // 1 - FOR TESTS , 7 - for real fights
     }
     if (SpeedValue_Now < ZeroPWM)
     {
-      Step_For_Move = 1; // pull to zero
+      Step_For_Move = 4; // pull to zero // 1 - FOR TESTS , 7 - for real fights
     }
     //Calculate
     SpeedValue_Now = SpeedValue_Now + Step_For_Move;
-    if (SpeedValue_Now == ( (-1)*ZeroPWM + 1) | SpeedValue_Now == ((-1)*ZeroPWM))  // == -29 | -30
+    //Teleport
+    if ( ( (SpeedValue_Now <= ZeroPWM) & (SpeedValue_Now >= ZeroPWM - abs(Step_For_Move)) )                       //  (X <= 30) & (X >= 25)
+         | ( (SpeedValue_Now >= (-1) * ZeroPWM) & (SpeedValue_Now <= ( (-1) * ZeroPWM + abs(Step_For_Move)) ) ) ) // ( X >= -30) & ( X <= -25 )
     {
       SpeedValue_Now = ZeroPWM;
       Step_For_Move = 0;  // command complete
       PC_Debug.println("STOP NOW");
+      digitalWrite(LedLimited, LOW);
     }
     //Debug
     PC_Debug.print("(Stopping)Speed == ");
     PC_Debug.println(SpeedValue_Now);
-    PC_Debug.println("---------------");
+    //    PC_Debug.println("---------------");
   }
   //Forward
   if (instruction == Forward)
@@ -229,21 +362,24 @@ void Command_To_Motor(int instruction)
     }
     if (SpeedValue_Now >= Min_SpeedValue && SpeedValue_Now < Max_SpeedValue)
     {
-      Step_For_Move = 1; // pull to 225 (Max_SpeedValue)
+      Step_For_Move = 4; // pull to 225 (Max_SpeedValue)
     }
     SpeedValue_Now = SpeedValue_Now + Step_For_Move;
-    if (SpeedValue_Now == (ZeroPWM * (-1) + 1) | SpeedValue_Now == ((-1)*ZeroPWM)) // == - 29 | == -30
+    //Teleport
+    if (SpeedValue_Now >= ZeroPWM * (-1) & (SpeedValue_Now <= ((-1) * ZeroPWM + abs(Step_For_Move)) ) )  // (X >= -30 & X <= -25 )
       SpeedValue_Now = ZeroPWM;
     // FINISHER
-    if (SpeedValue_Now == Max_SpeedValue) // ==Wished_Speed
+    if (SpeedValue_Now >= Max_SpeedValue & SpeedValue_Now <= ( Max_SpeedValue + abs(Step_For_Move) )) // ==Wished_Speed
     {
+      SpeedValue_Now = Max_SpeedValue;
       Step_For_Move = 0;  // command complete
+      digitalWrite(LedLimited, HIGH);
       PC_Debug.println("Max Speed RIGHT NOW! LvL UP! ");
     }
     //Debug
     PC_Debug.print("(Grow) Speed == ");
     PC_Debug.println(SpeedValue_Now);
-    PC_Debug.println("---------------");
+    //    PC_Debug.println("---------------");
   }
   //Backward
   if (instruction == Backward)
@@ -255,21 +391,23 @@ void Command_To_Motor(int instruction)
     }
     if (SpeedValue_Now > Min_SpeedValue && SpeedValue_Now <= Max_SpeedValue)
     {
-      Step_For_Move = -1;
+      Step_For_Move = -4;  // -1 - FOR TESTS , -7 - for real fights
     }
+    //Teleport
     SpeedValue_Now = SpeedValue_Now + Step_For_Move;
-    if (SpeedValue_Now == ZeroPWM | SpeedValue_Now == ZeroPWM - 1) // == 30 | == 29
+    if ( (SpeedValue_Now <= ZeroPWM) & (SpeedValue_Now >= ZeroPWM - abs(Step_For_Move) ) ) // == 30 |  ( X <= 30 & X >= 25)
       SpeedValue_Now = ZeroPWM * (-1);
     // FINISHER
-    if (SpeedValue_Now == Min_SpeedValue)
+    if (SpeedValue_Now <= Min_SpeedValue)
     {
+      SpeedValue_Now = Min_SpeedValue;
       Step_For_Move = 0;  // command complete
+      digitalWrite(LedLimited, HIGH);
       PC_Debug.println("We Reversed");
     }
     //Debug
     PC_Debug.print("(Drop) Speed == ");
     PC_Debug.println(SpeedValue_Now);
-    PC_Debug.println("---------------");
   }
   // Command Release
   Execute_The_Command(SpeedValue_Now);
@@ -326,10 +464,10 @@ void Execute_The_Command(int Speed)
     //Debug
     PC_Debug.print("Error!!! Speed == ");
     PC_Debug.println(SpeedValue_Now);
-    PC_Debug.println("---------------");
+    PC_Debug.println("");
     PC_Debug.print("RESET -> Speed Value_Now = ");
     PC_Debug.println(SpeedValue_Now);
-    PC_Debug.println("---------------");
+    PC_Debug.println("");
     //      PC_Debug.println("ERROR from Host (Swither have bugs or lags) , sadness ");
     //Debug on LEDs
     digitalWrite(ForwardLed, HIGH);
@@ -358,10 +496,11 @@ void sendData()
   PC_Debug.print("tx.getFrameId() == ");
   PC_Debug.println( tx.getFrameId() );
   // TEST
-    if (tx.getFrameId()) //Проверяем, не заблокировано ли локальное подтверждение отправки.
-      getLocalResponse(50);
-    if ((tx.getFrameId() == 0) || (txStatus.isSuccess() && tx.getSleepingDevice() == false)) //Ждем ответного пакета от удаленного модема только если локальный ответ выключен или пакет отправлен в эфир и не предназначается спящему модему.
-      getRemoteResponse(100);
+  if (tx.getFrameId()) //Проверяем, не заблокировано ли локальное подтверждение отправки.
+    getLocalResponse(50);
+  if ((tx.getFrameId() == 0) || (txStatus.isSuccess() && tx.getSleepingDevice() == false)) //Ждем ответного пакета от удаленного модема
+    //только если локальный ответ выключен или пакет отправлен в эфир и не предназначается спящему модему.
+    getRemoteResponse(100);
 }
 
 void getLocalResponse(uint16_t timeout)
@@ -472,7 +611,14 @@ void Print_All_Array(int8_t Size, boolean WriteEnable)
   }
 }
 
-void serialEvent1()
+void EmergencyStop()
 {
-  //  PC_Debug.println("serialEvent1 for MBEE_ PROCK ");
+  Alarm_ON();
+  // STOP RIGHT NOW
+  SpeedValue_Now = ZeroPWM;
+  Step_For_Move = 0;
+  digitalWrite(Direction_Of_Move, LOW);
+  digitalWrite(Permission_Of_Move, LOW);
+  digitalWrite(Permission_Of_Move, LOW);
+  analogWrite(PWM_Pin, ZeroPWM);
 }

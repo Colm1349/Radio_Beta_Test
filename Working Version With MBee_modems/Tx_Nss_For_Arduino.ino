@@ -1,4 +1,4 @@
-/**
+/**333
    Этот файл является частью библиотеки MBee-Arduino.
 
    MBee-Arduino является бесплатным программным обеспечением.
@@ -12,48 +12,14 @@
 #include <MBee.h>
 #include <SoftwareSerial.h>
 
-/**
-    Скетч предназначен для демонстрации передачи пакетов с данными удаленному модему.
-    Передающий и принимающий модемы работают под управлением программного обеспечения SerialStar
-    для модулей MBee-868-x.0.
-    Действия, производимые скетчем подробно описаны в комментариях к соответствующим строкам.
-    Потребуются 2 модуля MBee-868-x.0. Первый модуль соедининяется с платой Arduino c помощью
-    XBee-shield или любого другого совместимого устройств. Если доступного шилда нет, то возможно
-    соединение Arduino и модуля с помощью проводов.
-    ВНИМАНИЕ!!! Модуль MBee-868-x.0 имеет номинальное значение напряжения питания 3,3В. Если Ваша
-    плата Arduino имеет выходы с логическими уровнями 5В, то необходимо предусмотреть делитель
-    напряжения между выходом TX Arduino и входом RX модуля (вывод №3 для всех моделей). К выводу TX
-    Arduino подключается резистор 2К, с которым соединен резистор 1К, второй вывод последнего
-    сажается на землю. Точка соединения резисторов соединяется с выводом №3 модуля.
-    Вывод №2 модуля (TX), подключается ко входу RX Arduino через последовательный резистор 1К.
-    При использовании для питания модуля собственного источника 3,3В Arduino, необходимо помнить о том,
-    что модули могут потреблять в режиме передачи токи до 200 мА. Поэтому необходимо уточнять
-    нагрузочные характеристики применяемой Вами платы Arduino. При коротких эфирных пакетах для
-    компенсации недостаточного выходного тока источника 3,3В можно применить конденсаторы с емкостью
-    не менее 2200 мкФ, устанавливаемые параллельно питанию модуля.
-    На обоих модулях, после загрузки программного обеспечения SerialStar, должен быть произведен возврат
-    к заводским настройкам одним из двух способов:
-    1. Быстрое 4-х кратное нажатие "SYSTEM BUTTON" (замыкание вывода №36 модуля на землю).
-    2. С помощью командного режима: +++, AT RE<CR>, AT CN<CR>.
-
-    Первый модуль должен быть предварительно настроен для работы в пакетном режиме с escape-
-    символами AP=2. Режим аппаратного управления потоком (CTS/RTS) должен быть отключен.
-    Последовательность для настройки: +++, AT AP2<CR>, AT CN<CR>.
-    Для контроля процесса передачи, к Arduino должны быть подключены через резисторы 1К два светодиода.
-
-    Второй модуль устанавливается на плату MB-USBridge, или любой другой UART-USB/UART-COM
-    преобразователь с выходными уровнями 3,3 В, для подключения к компьютеру. На компьютере
-    должна быть запущена любая терминальная программа с настройками порта 9600 8N1.
-    Никакие дополнительные предварительные настройки второго модуля не требуются.
-*/
-
-
 #define PC_Serial nss
 #define MBee_Serial Serial
 #define Stop 0
 #define Forward 5
 #define Backward 2
 #define Corrupted_Command 10
+#define EmergencyStopCode 170
+#define StopButtonPin 7
 
 uint8_t ssRX = 8;
 uint8_t ssTX = 9;
@@ -63,7 +29,7 @@ SerialStar mbee = SerialStar();
 uint16_t remoteAddress = 0x0001; //Адрес модема, которому будут передаваться данные.
 
 char testString[] = "Hello world!";
-uint8_t testArray [] = {200, 100};
+uint8_t testArray [] = {200, 100, 88};
 
 TxRequest tx = TxRequest(); //Пакет с данными для отправки удаленному модему. Для экономии памяти будем использовать один и тот же объект для отправки всех пакетов.
 TxStatusResponse txStatus = TxStatusResponse(); //Локальный ответ со статусом команды.
@@ -79,6 +45,8 @@ int Red_Led = 12;
 int ForwardPin = 2;
 int BackwardPin = 3;
 int CommandForRaper = 0; // 0 == stop
+bool lastButton = false;
+bool currentButton = false;
 
 void setup()
 {
@@ -88,8 +56,8 @@ void setup()
   pinMode(Red_Led, OUTPUT);
   pinMode(ForwardPin , INPUT);
   pinMode(BackwardPin, INPUT);
-  PC_Serial.begin(9600);
-  MBee_Serial.begin(9600);
+  PC_Serial.begin(115200);
+  MBee_Serial.begin(115200);
   mbee.begin(MBee_Serial);
   delay(500); //Задержка не обязательна и вставлена для удобства работы с терминальной программой.
 }
@@ -107,16 +75,29 @@ void loop()
   //Read command
   ReadCommandFromSwither();
   //Write our command into "testArray" for send.
-//  if (CommandForRaper != 0)
-//  {
-    testArray[1] = CommandForRaper;
-//  }
+  //  if (CommandForRaper != 0)
+  //  {
+  testArray[0] = number_of_packet;
+  testArray[1] = CommandForRaper;
+  //  }
+  currentButton = debounce(lastButton);
+  if ( currentButton == true )
+  {
+    PC_Serial.println("STOP THIS");
+    delay(10);
+    testArray[2] = EmergencyStopCode;
+  }
+  else
+  {
+    PC_Serial.println("All HOPE IS OK");
+//    delay(100);
+    testArray[2] = 88;
+  }
   sendData(); // sending
-  //  delay(300);
   // +1 counter of packet
   number_of_packet++;
   //testArray [0] = number_of_packet;
-  
+  delay(10);
 }
 
 void ReadCommandFromSwither()
@@ -227,4 +208,31 @@ void flashLed(int pin, int times, int wait)
       //      delay(wait);
       delay(1);
   }
+}
+
+bool EmergencyStopButtonIsPressed()
+{
+  bool answer;
+  currentButton = debounce(lastButton);
+  if (lastButton == LOW && currentButton == HIGH)
+  {
+    answer = true;
+    PC_Serial.println("Emergency Stop  == TRUE ");
+    delay(500);
+  }
+  lastButton = currentButton;
+  answer = false;
+  return answer;
+}
+
+boolean debounce(boolean last)
+{
+  boolean current = digitalRead(StopButtonPin);
+  if (last != current)
+  {
+    delay(5);
+    Serial.println("last != current");
+    current = digitalRead(StopButtonPin);
+  }
+  return current;
 }
