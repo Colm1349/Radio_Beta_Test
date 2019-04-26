@@ -8,15 +8,16 @@ int xk=0; // переменная координаты X конца
 int yk=0; // переменная координаты Y конца 
 
 //Data from Arduino
-int Speed_1 = 1349;
-int Speed_2 = 0;
-int I_1 = 10;
-int I_2 = 20;
-int V_Roper = 0;
-int V_control_panel = 0;
-int PWM_Value = 3;
+double Speed_1 = 1349;
+double Speed_2 = 0;
+double I_1 = 10;
+double I_2 = 20;
+double V_Roper = 0;
+double V_Control_Panel = 0;
+double PWM_Value = 3;
 char Movement = 'S';
-String Direction = "STOP";
+int DirectionInt = 0;
+String DirectionText = "STOP";
 int RSSI_Value = 0;
 //int Voltage_1 = 1;
 //int Voltage_2 = 2;
@@ -36,8 +37,8 @@ void setup() {
   //for Windows
   // ?????????????????????
 
-  myPort = new Serial(this, "/dev/ttyUSB2", 74880);
-  myPort.bufferUntil('\n'); //  Sets a specific byte to buffer until before calling serialEvent().
+  myPort = new Serial(this, "/dev/ttyUSB2", 115200);
+  myPort.bufferUntil('#'); //  Sets a specific byte to buffer until before calling serialEvent().
 }
 
 void draw() {
@@ -63,19 +64,31 @@ void drawGraph() {
   rect (5, 5, 900, 180); //рисует прямоугольник перекрывающий наш текст
   fill(255); // заливка для текста
   //text("MouseY= "+Y_val+" pix", 10, 30); // пишем Y= и подставляем полученное значение  // I_1
-  text("I1= "+I_1+" A", 10, 30);
-  text("I2= "+I_2+" A", 10, 60);
-  text("V_Roper= "+V_Roper+" V", 10, 90);
-  text("V_Remote= "+V_control_panel+" V", 10, 120);
-  text("Speed1 = "+Speed_1 + " RPM", 400, 30);
-  text("Speed2 = "+Speed_2 + " RPM", 400, 60);
-  text("PWM= "+PWM_Value+" %", 400, 90);
-  text("Direction= "+Direction, 400, 120);
-  text("RSSI_value= "+Y_val, 200, 150);  // RSSI_value
+
+  //float f4 = 1234.567;
+  //println(nf(f4, 0, 2)); // 1234.57 - rounded up
+
+  float I_1_F = (524 - (float)I_1) * 0.0125;
+  float I_2_F = (524 - (float)I_2) * 0.0125*0;
+  float Speed_1_F = (530 - (int)Speed_1) *16.67;
+  float Speed_2_F = (524 - (int)Speed_2) *16.67*0;
+  //println(I_1_F);
+  text("I1= "+ nf(I_1_F, 0, 2) +" A" + "(" + I_1 + ")", 10, 30); // *0.0125
+  text("I2= "+ nf(I_2_F, 0, 2) +" A" + "(" + I_2 + ")", 10, 60);
+  text("V_Roper= "+ V_Roper +" V", 10, 90);
+  text("V_Remote= "+ V_Control_Panel +" V", 10, 120);
+  text("Speed1 = "+ nf(Speed_1_F, 0, 0) + " RPM" + "(" + Speed_1 + ")", 400, 30); // *16.67
+  text("Speed2 = "+ nf(Speed_2_F, 0, 0) + " RPM" + "(" + Speed_2 + ")", 400, 60);
+  text("PWM= "+ PWM_Value +" %", 400, 90);
+  text("Direction= "+ DirectionText + " [" + DirectionInt + "]", 400, 120);
+  text("RSSI_value= "+ Y_val, 200, 150);  // RSSI_value
   stroke(255); // цвет будущей линии белый
 
-  yk=(Speed_1)/2; // 1023/2 = 512. Cжатие масштаба x0.5 | X/4 Cжатие масштаба x0.25 ;
-  line (xn+10, yn+200, xk+10, yk+200); // рисуем линию
+  //yk=((int)Speed_1)/36; // 1023/2 = 512. Cжатие масштаба x0.5 | X/32 Cжатие масштаба x0.03125 ;\
+  //yk=((int)Speed_1)/4;I_1
+  yk=((int)I_1)/2;
+
+  line (xn+10, yn+300, xk+10, yk+300); // рисуем линию
   xn=xk; // после того как нарисовали линию присваиваем Xначала значение Хконца
   yn=yk; // после того как нарисовали линию присваиваем Yначала значение Yконца
   xk++; // смещаем Xконца на единицу
@@ -106,51 +119,59 @@ int ParseDataFromArduino() {  //return 0 if all good
       EqualsIndex = i;
       System.out.println("EqualsIndex ==" + EqualsIndex);
     }
-    if (inString.charAt(i) == ' ' ) {
+    if (inString.charAt(i) == '~' ) {
       EndLine = i;
       System.out.println("EndLine ==" + EndLine);
       //String Convert into value
       String temp = inString.substring(EqualsIndex+1, EndLine); // [x, y)  y-1 deleted
       if (j == 8)
-        System.out.println("Direction =="+ temp);
+        System.out.println("Direction ==" + temp);
       System.out.println("temp[" + j + "] ==" + temp);
       System.out.println("temp[" + j + "].length ==" + temp.length());
 
       switch(j) {
       case 1:
-        Speed_1 = Integer.parseInt(temp);
+        Speed_1 = Double.parseDouble(temp);
+        //Speed_1= Float.parseFloat(temp);
         break;
       case 2:
-        Speed_2 = Integer.parseInt(temp);
+        Speed_2 = Double.parseDouble(temp);
         break;
       case 3:
-        I_1 = Integer.parseInt(temp);
+        I_1 = Double.parseDouble(temp);
         break;
       case 4:
-        I_2 = Integer.parseInt(temp);
+        I_2 = Double.parseDouble(temp);
         break;
       case 5:
-        V_Roper = Integer.parseInt(temp);
+        V_Roper = Double.parseDouble(temp);
         break;
       case 6:
-        V_control_panel = Integer.parseInt(temp);
+        PWM_Value = Double.parseDouble(temp);
+        //V_control_panel = Integer.parseInt(temp);
         break;
       case 7:
-        PWM_Value = Integer.parseInt(temp);
+        DirectionInt = Integer.parseInt(temp);
+        if (DirectionInt == 0)
+          DirectionText = "STOP";
+        if (DirectionInt == 2)
+          DirectionText = "BACK";
+        if (DirectionInt == 5)
+          DirectionText = "FORWARD";
         break;
       case 8:
-        Direction = temp;
+        V_Control_Panel = Integer.parseInt(temp);
         break;
       case 9:
         RSSI_Value = Integer.parseInt(temp);
         break;
 
       default:
-        System.out.println("ERROR");
+        System.out.println("____ERROR____");
         break;
       }
       j++;  
-      if (j > 4)
+      if (j > 8)
       {
         System.out.println("All Received");   
         break;
@@ -172,11 +193,13 @@ int ParseDataFromArduino() {  //return 0 if all good
 
 void serialEvent (Serial myPort) {
   // get the ASCII string:  
-  inString = myPort.readStringUntil('\n');
+  inString = myPort.readStringUntil('#');
   print("InSring ===");
   println(inString);
   //inByte = float(myPort.readStringUntil('\n'));
-  delay(20);
+
+  //delay(20);
+  delay(5);
   //print("inByte ==");
   //println(inByte);
 
@@ -189,5 +212,6 @@ void serialEvent (Serial myPort) {
   //    //println(inByte);
   //    inByte = map(inByte, 0, 1023, 0, height);
   //  }
+
   ParseDataFromArduino();
 }
