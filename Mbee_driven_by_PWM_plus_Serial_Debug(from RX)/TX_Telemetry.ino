@@ -1,11 +1,30 @@
 /**333
-   Этот файл является частью библиотеки MBee-Arduino.
+   с MBee-Arduino.
    MBee-Arduino является бесплатным программным обеспечением.
    Подробная информация о лицензиях находится в файле mbee.h.
    \author </i> von Boduen. Special thanx to Andrew Rapp.
 */
 
 // Version 0.9
+
+
+//Описание 
+/*  Пульт радиоуправления способный передать команду самоходу по радиуправлению через MBee или по кабелю
+ *  и принять телеметрию , далее отобразить основные парамерты на дисплее.
+ *  Имеет возможность активировать звуковую индикацию и посылать отладочные сообщения через пины 7 и 8 на PC
+ *  Аварийный стоп + защита от одновременного зажатия ВПЕРЕД И НАЗАД 
+ *  
+ *  Надо добавить 
+ *  1) Переключение режимов по проводу или по радио
+ *  2) Настройка обработки массива данных от самохода по кабелю.
+ *  3) Звуковую индикацию
+ *  4) При отсутствиии телеметрии больше 0.5-4 сек перезагружаться.
+ *  5) Чтение АЦПхой уровня напряжения батареи (кроны) и рассчитать резисторы.
+ *  6) Отображение светодиодом режима работы (проводное/беспроводное)
+ *  7) работа с дисплеем
+ * 
+ */
+
 
 #include <MBee.h>
 #include <SoftwareSerial.h>
@@ -68,7 +87,7 @@ void setup()
   pinMode(Red_Led, OUTPUT);
   pinMode(ForwardPin , INPUT);
   pinMode(BackwardPin, INPUT);
-  DEBUG.begin(115200);
+  DEBUG.begin(57600);
   MBee_Serial.begin(115200);
   mbee.begin(MBee_Serial);
   DEBUG.println("TX READY FOR your suffering!");
@@ -78,7 +97,9 @@ void setup()
 
 void loop()
 {
+//  MBee_Serial.println("Test_11");
   static int number_of_packet = 0;
+  if (number_of_packet >= 16001) number_of_packet = 0;
   DEBUG.print("Sending...[");
   DEBUG.print(number_of_packet);
   DEBUG.println("]");
@@ -111,7 +132,12 @@ void loop()
   mbee.readPacket(); //Постоянно проверяем наличие данных от модема.
   if (mbee.getResponse().isAvailable())
   {
-    DEBUG.println("TX Packet READED, NICE!");
+    DEBUG.println("TX Packet from Rx READED, NICE!");
+    DEBUG.print("API ID === ");
+    DEBUG.println( mbee.getResponse().getApiId() );
+    // Print RSSI
+    DEBUG.print("RSSI -> ");
+    DEBUG.println(rx.getRssi());
     //    Debug_information_About_Rx_Packet(); // debug info
     if (mbee.getResponse().getApiId() == RECEIVE_PACKET_API_FRAME || mbee.getResponse().getApiId() == RECEIVE_PACKET_NO_OPTIONS_API_FRAME)
     {
@@ -130,7 +156,7 @@ void loop()
       }
       else
       {
-        //DEBUG.println("TX Packet have many Symbols");
+        DEBUG.println("TX Packet have many Symbols");
         int j = 0;
         //"WRITE" ALL PACKET
         if (rx.getDataLength() > 1)
@@ -162,11 +188,12 @@ void loop()
             DEBUG.println(ArrayFromRX[i]);
           }
         }
-        Printing_Values_On_A_PC_Monitor();
+//        Printing_Values_On_A_PC_Monitor();
       }
     }
     else
-      flashLed(errorLed, 1, 500); //Принят фрейм, не предназначенный для передачи неструктурированных данных.
+      DEBUG.println("Unexpected API ID from RX");
+    //      flashLed(errorLed, 1, 500); //Принят фрейм, не предназначенный для передачи неструктурированных данных.
 
   }
   else
@@ -225,8 +252,8 @@ void sendData()
   mbee.send(tx);
   //    if (tx.getFrameId()) //Проверяем, не заблокировано ли локальное подтверждение отправки.
   //      getLocalResponse(50);
-    if ((tx.getFrameId() == 0) || (txStatus.isSuccess() && tx.getSleepingDevice() == false)) //Ждем ответного пакета от удаленного модема только если локальный ответ выключен или пакет отправлен в эфир и не предназначается спящему модему.
-      getRemoteResponse(5);
+  if ((tx.getFrameId() == 0) || (txStatus.isSuccess() && tx.getSleepingDevice() == false)) //Ждем ответного пакета от удаленного модема только если локальный ответ выключен или пакет отправлен в эфир и не предназначается спящему модему.
+    getRemoteResponse(5);
 }
 
 void getLocalResponse(uint16_t timeout)
@@ -315,19 +342,19 @@ void Printing_Values_On_A_PC_Monitor()
   DEBUG.print("Speed_1=");
   temp = ArrayFromRX[1] + (ArrayFromRX[2] << 8);
   Speed_1_RPM = (540 - temp) * ADC_Speed_RPM_Step; //because invertor after ADC
-//  DEBUG.print(Speed_1_RPM);  
+  //  DEBUG.print(Speed_1_RPM);
   DEBUG.print(temp);
-  
+
   DEBUG.print("~Speed_2=");
   temp = ArrayFromRX[3] + (ArrayFromRX[4] << 8);
   Speed_2_RPM = (540 - temp) * ADC_Speed_RPM_Step;
   DEBUG.print(Speed_2_RPM);
-  
+
   DEBUG.print("~I_1=");
   temp = ArrayFromRX[5] + (ArrayFromRX[6] << 8);
   I_1_A = (550 - temp) * ADC_Current_Step;
   DEBUG.print(temp);  //I_1_A
-  
+
   DEBUG.print("~I_2=");
   temp = ArrayFromRX[7] + (ArrayFromRX[8] << 8);
   I_2_A = temp * ADC_Current_Step;
@@ -345,6 +372,10 @@ void Printing_Values_On_A_PC_Monitor()
   int V_Control_Panel = digitalRead(0);
   DEBUG.print("~V_Control_Panel=");
   DEBUG.print("1388");
+  // Print RSSI
+  DEBUG.print("~RSSI=");
+  DEBUG.print(rx.getRssi());
+
   //  DEBUG.print( V_Control_Panel );
   DEBUG.println("~ #");
   DEBUG.println();
