@@ -10,6 +10,18 @@
 #include <avr/wdt.h>
 
 // ОПИСАНИЕ ЗАДАЧИ ДОБАВЬ!
+/*   Приёмник сигнала с пульта. Если сигнале нет 0.5 сек - перазгрузка
+     Приём сигнала даёт возможность начать движение самохода через подачу управляющих сигналов на контроллеры ESCON с использованием ШИМ
+     Вперед/Назад/Стоп и получени телеметрии с ESCON'a через АЦП , 4 входа АЦП для 4ех параметров (Скорость и обороты каждого из 2ух двигателей)
+     и отправляет отладочные сообщения на пинах 7 и 8 на PC
+     Отображает светодиодами состояние батареи, направление движения, наличие ошибок, выбор режима связи (радио или провод)
+     Отсутствие сигнала приводит к включению звуковой индикации и подаче сигнала СТОП на двигатели при дальнейшем отсутствии сигнала приводит перезагрузке.
+
+*/
+
+// add AnalogPin - as selector
+// add buzzer
+// add
 
 
 //For UNO
@@ -30,8 +42,20 @@
 #define Min_SpeedValue -225
 
 //ADC read pins
-#define ADCpin_Current1 0
-#define ADCpin_Speed1 1
+// A0 - xt3
+// A1 - SWITCHER
+// A2 - LED#7
+// A3 - Battery LvL
+// A4 - Speed 2
+// A5 - Current 2
+// A6 - Speed 1
+// A7 - Current 1
+#define ADCpin_Current1 7
+#define ADCpin_Speed1 6
+#define ADCpin_Current2 5  // no use(
+#define ADCpin_Speed2 4    // no use(
+#define BatteryLvL_ADC 3   // no use(
+#define ErrorLed_ADCPin 2  // no use(
 
 //PINs
 #define ForwardLed 4
@@ -74,6 +98,7 @@ int ChainComboErrors = 0;
 bool WDT_ACTIVE = false;
 bool AlarmTrigger = false;
 bool FLAG_Release_Command = false;
+bool SuddenReverse = false;
 int GoodRx = 0;
 double KoefGood = 0;
 int Current_1 = 0;
@@ -96,7 +121,10 @@ ISR(TIMER2_OVF_vect)
     Alarm_ON();
     if (WDT_ACTIVE == false)
     {
+      // no wdt plz!
       wdt_enable(WDTO_4S); // WDT ENABLE!
+      // no wdt plz!
+
       WDT_ACTIVE = true;
     }
     Counter_To_Start_WDT = 0;
@@ -185,8 +213,26 @@ void setup()
   pinMode(Direction_Of_Move, OUTPUT);
   pinMode(LedLimited, OUTPUT);
   pinMode(LedDebug, OUTPUT);
-  PC_Debug.begin(115200);
+  //test for real board (pp)
+
+  pinMode(A0, INPUT);
+  pinMode(A1, INPUT);
+  pinMode(A2, INPUT);
+  pinMode(A3, INPUT);
+  pinMode(A4, INPUT);
+  pinMode(A5, INPUT);
+  pinMode(A6, INPUT);
+  pinMode(A7, INPUT);
+
+
+  //  digitalWrite(A1, HIGH);
+  //  delay(2000);
+  //  digitalWrite(A5, LOW);
+
+
+  PC_Debug.begin(57600);
   MBee_Serial.begin(115200);
+  //  MBee_Serial.println("start_mbee_line");
   mbee.begin(MBee_Serial);
   //  //Настройка таймера 0 (T1) 16 bit
   //  TCNT0 = 0;   // счетный регистр (туда "капают" значения)
@@ -212,6 +258,7 @@ void setup()
 
 void loop()
 {
+  //  MBee_Serial.println("MBEE_loop _ x");
   ADCread();
   setArrayForTelemetry();
   tx.setPayload((uint8_t*)testArray); //Устанавливаем указатель на тестовый массив
@@ -221,6 +268,11 @@ void loop()
   {
     PC_Debug.println("RX received an input packet!");
     ChainComboErrors = 0; // reset combo
+    PC_Debug.print("API ID === ");
+    PC_Debug.println( mbee.getResponse().getApiId() );
+    // Print RSSI
+    PC_Debug.print("RSSI -> ");
+    PC_Debug.println(rx.getRssi());
     if (mbee.getResponse().getApiId() == RECEIVE_PACKET_API_FRAME || mbee.getResponse().getApiId() == RECEIVE_PACKET_NO_OPTIONS_API_FRAME) // 0x81==129 and 0x8F==143
     {
       Reset_Error_Timer_And_Check_WDT();
@@ -360,6 +412,19 @@ void Command_To_Motor(int instruction)
   {
     // NEED ADD REACTION On "ERROR_VALUE"
   }
+
+  //KURKUMA
+  if ( (instruction == Forward & SpeedValue_Now < ZeroPWM ) | (instruction == Backward & SpeedValue_Now > ZeroPWM))
+  {
+    instruction = Stop;
+    SuddenReverse = true;
+    PC_Debug.println("WATCH OUT!!! Reverse_detected !!!WATCH OUT");
+    PC_Debug.print("instruction ------ ");
+    PC_Debug.println(instruction);
+    //    delay(3000);
+  }
+  //TEST
+
   if (instruction == Stop)
   {
     if (SpeedValue_Now == ZeroPWM)
@@ -487,13 +552,18 @@ void Execute_The_Command(int Speed)
     if (Speed == ZeroPWM) //S
     {
       digitalWrite(Direction_Of_Move, LOW);
-      digitalWrite(Permission_Of_Move, LOW);
+      digitalWrite(Permission_Of_Move, HIGH);  // HIGH for normal braking
       analogWrite(PWM_Pin, Speed);
       //Debug
       //      PC_Debug.println("|| STOP ||");
       digitalWrite(ForwardLed, LOW);
       digitalWrite(BackwardLed, LOW);
       digitalWrite(systemLed, LOW);
+      if ( SuddenReverse == true);
+      {
+        delay(2000);
+        SuddenReverse = false;
+      }
     }
   }
   else
@@ -505,8 +575,8 @@ void Execute_The_Command(int Speed)
     SpeedValue_Now = ZeroPWM;
     Step_For_Move = 0;
     //Debug
-    //    PC_Debug.print("Error!!! Speed == ");
-    //    PC_Debug.println(SpeedValue_Now);
+    PC_Debug.print("Error!!! Speed == ");
+    PC_Debug.println(SpeedValue_Now);
     //    PC_Debug.println("");
     //    PC_Debug.print("RESET -> Speed Value_Now = ");
     //    PC_Debug.println(SpeedValue_Now);
@@ -644,7 +714,6 @@ void EmergencyStop()
   Step_For_Move = 0;
   digitalWrite(Direction_Of_Move, LOW);
   digitalWrite(Permission_Of_Move, LOW);
-  digitalWrite(Permission_Of_Move, LOW);
   analogWrite(PWM_Pin, ZeroPWM);
   sei();
 }
@@ -677,7 +746,7 @@ void setArrayForTelemetry() {
   testArray [10] = 0 >> 8;         // V_Roper_H
   testArray [11] = abs(SpeedValue_Now); //PWM_value
   testArray [12] = Direction;      //Direction
-  //  testArray [13] = Direction;
+  testArray [13] = Direction;
   return;
 }
 
@@ -705,4 +774,5 @@ void Data_Send_To_Processing() {
   PC_Debug.print(" ");
   PC_Debug.println();
   delay(30);
+  return;
 }
