@@ -8,22 +8,22 @@
 // Version 0.9
 
 
-//Описание 
+//Описание
 /*  Пульт радиоуправления способный передать команду самоходу по радиуправлению через MBee или по кабелю
- *  и принять телеметрию , далее отобразить основные парамерты на дисплее.
- *  Имеет возможность активировать звуковую индикацию и посылать отладочные сообщения через пины 7 и 8 на PC
- *  Аварийный стоп + защита от одновременного зажатия ВПЕРЕД И НАЗАД 
- *  
- *  Надо добавить 
- *  1) Переключение режимов по проводу или по радио
- *  2) Настройка обработки массива данных от самохода по кабелю.
- *  3) Звуковую индикацию
- *  4) При отсутствиии телеметрии больше 0.5-4 сек перезагружаться.
- *  5) Чтение АЦПхой уровня напряжения батареи (кроны) и рассчитать резисторы.
- *  6) Отображение светодиодом режима работы (проводное/беспроводное)
- *  7) работа с дисплеем
- * 
- */
+    и принять телеметрию , далее отобразить основные парамерты на дисплее.
+    Имеет возможность активировать звуковую индикацию и посылать отладочные сообщения через пины 7 и 8 на PC
+    Аварийный стоп + защита от одновременного зажатия ВПЕРЕД И НАЗАД
+
+    Надо добавить
+    1) Переключение режимов по проводу или по радио
+    2) Настройка обработки массива данных от самохода по кабелю.
+    3) Звуковую индикацию
+    4) При отсутствиии телеметрии больше 0.5-4 сек перезагружаться.
+    5) Чтение АЦПхой уровня напряжения батареи (кроны) и рассчитать резисторы.
+    6) Отображение светодиодом режима работы (проводное/беспроводное)
+    7) работа с дисплеем
+
+*/
 
 
 #include <MBee.h>
@@ -35,12 +35,13 @@
 #define Forward 5
 #define Backward 2
 #define Corrupted_Command 10
-#define EmergencyStopCode 170
-#define StopButtonPin 7
+#define EmergencyStopCode 170     // code for Stop device. (no breaks and just fall down)
 #define ADC_Speed_RPM_Step 16.67
 #define ADC_Current_Step 0.0125
 #define ADC_Voltage_Step 0.0047
 #define ADC_PWM_Step 0.4
+#define StopButtonPin 10
+#define EmergencyStopCode 52
 
 uint8_t ArrayFromRX [] = {0, 11, 12, 21, 22, 31, 32, 41, 42, 51, 52, 120, 130};
 uint8_t ssRX = 8;
@@ -61,7 +62,7 @@ uint16_t remoteAddress = 0x0001; //Адрес модема, которому б�
 uint8_t testArray [] = {200, 100, 88};
 uint8_t option = 0;
 uint8_t data = 0;
-int errorLed = 56;
+int errorLed = 5;
 int statusLed = 13; //Используется встроенный в Вашу плату Arduino светодиод. = LED_BUILTIN
 int Green_Led = 11;
 int Red_Led = 12;
@@ -87,7 +88,8 @@ void setup()
   pinMode(Red_Led, OUTPUT);
   pinMode(ForwardPin , INPUT);
   pinMode(BackwardPin, INPUT);
-  DEBUG.begin(57600);
+  pinMode(StopButtonPin, INPUT);
+  DEBUG.begin(115200);
   MBee_Serial.begin(115200);
   mbee.begin(MBee_Serial);
   DEBUG.println("TX READY FOR your suffering!");
@@ -97,7 +99,6 @@ void setup()
 
 void loop()
 {
-//  MBee_Serial.println("Test_11");
   static int number_of_packet = 0;
   if (number_of_packet >= 16001) number_of_packet = 0;
   DEBUG.print("Sending...[");
@@ -105,29 +106,37 @@ void loop()
   DEBUG.println("]");
   //Read command
   ReadCommandFromSwither();
-  //Write our command into "testArray" for send.
-  testArray[0] = number_of_packet;
-  testArray[1] = CommandForRaper;
-  tx.setPayload((uint8_t*)testArray); //Устанавливаем указатель на тестовый массив
-  tx.setPayloadLength(sizeof(testArray));  //Устанавливаем длину поля данных
-
   //Check Button
-  currentButton = debounce(lastButton);
+  currentButton = debounce(lastButton);  // ???
+  //currentButton = digitalRead(StopButtonPin);  // good
   if ( currentButton == true )
   {
-    DEBUG.println("STOP THIS");
-    delay(10);
-    testArray[2] = EmergencyStopCode;
+    DEBUG.println("Emergency STOP THIS");
+    testArray[2] = EmergencyStopCode;  // EmergencyStopCode 52
   }
   else
   {
     DEBUG.println("All HOPE IS OK");
     testArray[2] = 88;
   }
-
+  //Write our command into "testArray" for send.
+  testArray[0] = number_of_packet;
+  testArray[1] = CommandForRaper;
+  tx.setPayload((uint8_t*)testArray); //Устанавливаем указатель на тестовый массив
+  tx.setPayloadLength(sizeof(testArray));  //Устанавливаем длину поля данных
   sendData();
   delay(50);
   number_of_packet++;     // +1 counter of packet
+  //  DEBUG.print("tx.getDataLength() -- ");
+  //  DEBUG.println(tx.getFrameDataLength());
+  //  for ( int i = 0 ; i < tx.getFrameDataLength() ; i++)
+  //  {
+  //    DEBUG.print("tx.getFrameData(");
+  //    DEBUG.print(i);
+  //    DEBUG.print(") = ");
+  //    DEBUG.println(tx.getFrameData(i));
+  //  }
+
   //read input Telemetry
   mbee.readPacket(); //Постоянно проверяем наличие данных от модема.
   if (mbee.getResponse().isAvailable())
@@ -179,16 +188,18 @@ void loop()
               j++;
             }
           }
-          int arraySize = sizeof(ArrayFromRX) / sizeof(ArrayFromRX[0]);
-          for (int i = 0; i < arraySize ; i++ )
-          {
-            DEBUG.print("ArrayFromRX_cutted [");
-            DEBUG.print(i);
-            DEBUG.print("] -->");
-            DEBUG.println(ArrayFromRX[i]);
-          }
+
+          //          int arraySize = sizeof(ArrayFromRX) / sizeof(ArrayFromRX[0]);
+          //          for (int i = 0; i < arraySize ; i++ )
+          //          {
+          //            DEBUG.print("ArrayFromRX_cutted [");
+          //            DEBUG.print(i);
+          //            DEBUG.print("] -->");
+          //            DEBUG.println(ArrayFromRX[i]);
+          //          }
+
         }
-//        Printing_Values_On_A_PC_Monitor();
+        Printing_Values_On_A_PC_Monitor();
       }
     }
     else
@@ -240,7 +251,7 @@ void ReadCommandFromSwither()
     digitalWrite(Red_Led,  HIGH);
     digitalWrite(Green_Led, HIGH);
     digitalWrite(statusLed, HIGH);
-    DEBUG.println(" NO Command , we have a ERROR ((( ");
+    DEBUG.println(" NO Command, we have a ERROR ((( ");
   }
   DEBUG.print("CommandForRaper --> ");
   DEBUG.println(CommandForRaper);
@@ -316,8 +327,8 @@ bool EmergencyStopButtonIsPressed()
   if (lastButton == LOW && currentButton == HIGH)
   {
     answer = true;
-    DEBUG.println("Emergency Stop  == TRUE ");
-    delay(200);
+    DEBUG.println("Emergency Stop == TRUE ");
+    delay(20);
   }
   lastButton = currentButton;
   answer = false;
@@ -330,7 +341,7 @@ boolean debounce(boolean last)
   if (last != current)
   {
     delay(5);
-    Serial.println("last != current");
+    DEBUG.println("last != current");
     current = digitalRead(StopButtonPin);
   }
   return current;

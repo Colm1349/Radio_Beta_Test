@@ -33,6 +33,7 @@
 //#define MBee_Serial Serial1
 
 //Const
+#define EmergencyStopCode 52
 #define Stop 0
 #define Forward 5
 #define Backward 2
@@ -54,7 +55,7 @@
 #define ADCpin_Speed1 6
 #define ADCpin_Current2 5  // no use(
 #define ADCpin_Speed2 4    // no use(
-#define BatteryLvL_ADC 3   // no use(
+#define ADCpin_BatteryLvL 3   // no use(
 #define ErrorLed_ADCPin 2  // no use(
 
 //PINs
@@ -99,12 +100,14 @@ bool WDT_ACTIVE = false;
 bool AlarmTrigger = false;
 bool FLAG_Release_Command = false;
 bool SuddenReverse = false;
+bool Release_The_Brakes = false;
 int GoodRx = 0;
 double KoefGood = 0;
 int Current_1 = 0;
 int Speed_1 = 0;
 int Current_2 = 0;
 int Speed_2 = 0;
+int BatteryCharge = 0;
 //SoftwareSerial nss(ssRX, ssTX);
 SoftwareSerial nss2(ssRX, ssTX);
 
@@ -218,7 +221,7 @@ void setup()
   pinMode(A0, INPUT);
   pinMode(A1, INPUT);
   pinMode(A2, INPUT);
-  pinMode(A3, INPUT);
+  pinMode(A3, INPUT);  //lvlBattery
   pinMode(A4, INPUT);
   pinMode(A5, INPUT);
   pinMode(A6, INPUT);
@@ -230,7 +233,7 @@ void setup()
   //  digitalWrite(A5, LOW);
 
 
-  PC_Debug.begin(57600);
+  PC_Debug.begin(115200);
   MBee_Serial.begin(115200);
   //  MBee_Serial.println("start_mbee_line");
   mbee.begin(MBee_Serial);
@@ -270,7 +273,6 @@ void loop()
     ChainComboErrors = 0; // reset combo
     PC_Debug.print("API ID === ");
     PC_Debug.println( mbee.getResponse().getApiId() );
-    // Print RSSI
     PC_Debug.print("RSSI -> ");
     PC_Debug.println(rx.getRssi());
     if (mbee.getResponse().getApiId() == RECEIVE_PACKET_API_FRAME || mbee.getResponse().getApiId() == RECEIVE_PACKET_NO_OPTIONS_API_FRAME) // 0x81==129 and 0x8F==143
@@ -291,7 +293,7 @@ void loop()
         PC_Debug.println("Input Data :");
         for (int i = 0 ; i < rx.getDataLength() ; i++ )
         {
-          if ( i == 8 || i == 9) {
+          if ( i == 8 || i == 9 || i == 10 ) {
             PC_Debug.print("Value [");
             PC_Debug.print(i);
             PC_Debug.print("] = ");
@@ -306,15 +308,18 @@ void loop()
       PC_Debug.println(CounterOfPacketsFromTx);
       PC_Debug.println();
       InputValue = rx.getData()[9];  // 9ый байт наша команда (куда ехать)
-      if (rx.getData()[10] == 170)
+      if (rx.getData()[10] == EmergencyStopCode)  //52
       {
         InputValue = Stop;
-        EmergencyStop();
-        PC_Debug.println("EMERGENCY STOP");
-        bool WriteAllArrayFlag = false;
-        Print_All_Array(size, WriteAllArrayFlag);
+        Release_The_Brakes = true;
+        Command_To_Motor(InputValue);
+        PC_Debug.println("EMERGENCY STOP / Release_The_Brakes = 1");
+        //        bool WriteAllArrayFlag = false;
+        //        Print_All_Array(size, WriteAllArrayFlag);
         delay(100);
       }
+      else
+        Release_The_Brakes = false;
 
       //Command_To_Motor(InputValue); // old version to move ours legs
       GoodRx = GoodRx + 1;
@@ -385,6 +390,8 @@ void loop()
   if (FLAG_Release_Command == true)
   {
     PC_Debug.println("Rotate again -_- SANSARA DRIFT");
+    PC_Debug.print("InputValue - ");
+    PC_Debug.println(InputValue);
     Command_To_Motor(InputValue);
     FLAG_Release_Command = false;
   }
@@ -412,7 +419,6 @@ void Command_To_Motor(int instruction)
   {
     // NEED ADD REACTION On "ERROR_VALUE"
   }
-
   //KURKUMA
   if ( (instruction == Forward & SpeedValue_Now < ZeroPWM ) | (instruction == Backward & SpeedValue_Now > ZeroPWM))
   {
@@ -423,8 +429,6 @@ void Command_To_Motor(int instruction)
     PC_Debug.println(instruction);
     //    delay(3000);
   }
-  //TEST
-
   if (instruction == Stop)
   {
     if (SpeedValue_Now == ZeroPWM)
@@ -474,7 +478,7 @@ void Command_To_Motor(int instruction)
     {
       Step_For_Move = 4; //pull to 225 (Max_SpeedValue)
     }
-    SpeedValue_Now = SpeedValue_Now + Step_For_Move;
+    SpeedValue_Now = SpeedValue_Now + Step_For_Move;  // increment or decrement PWM
     //Teleport
     if (SpeedValue_Now >= ZeroPWM * (-1) & (SpeedValue_Now <= ((-1) * ZeroPWM + abs(Step_For_Move)) ) )  // (X >= -30 & X <= -25 )
       SpeedValue_Now = ZeroPWM;
@@ -525,6 +529,7 @@ void Command_To_Motor(int instruction)
 
 void Execute_The_Command(int Speed)
 {
+
   if (Speed >= Min_SpeedValue & Speed <= Max_SpeedValue)
   {
     if (Speed > ZeroPWM) //F
@@ -551,17 +556,30 @@ void Execute_The_Command(int Speed)
     }
     if (Speed == ZeroPWM) //S
     {
-      digitalWrite(Direction_Of_Move, LOW);
-      digitalWrite(Permission_Of_Move, HIGH);  // HIGH for normal braking
-      analogWrite(PWM_Pin, Speed);
-      //Debug
-      //      PC_Debug.println("|| STOP ||");
-      digitalWrite(ForwardLed, LOW);
-      digitalWrite(BackwardLed, LOW);
-      digitalWrite(systemLed, LOW);
+      if (Release_The_Brakes == false)
+      {
+        digitalWrite(Direction_Of_Move, LOW);
+        digitalWrite(Permission_Of_Move, HIGH);  // HIGH for normal braking
+        analogWrite(PWM_Pin, Speed);
+        //Debug
+        //      PC_Debug.println("|| STOP ||");
+        digitalWrite(ForwardLed, LOW);
+        digitalWrite(BackwardLed, LOW);
+        digitalWrite(systemLed, LOW);
+      }
+      else
+      {
+        digitalWrite(Direction_Of_Move, LOW);
+        digitalWrite(Permission_Of_Move, LOW);  // LOW EMERGENCY braking ONLY
+        analogWrite(PWM_Pin, Speed);
+        //Debug
+        //      PC_Debug.println("|| STOP ||");
+        digitalWrite(ForwardLed, HIGH);
+        digitalWrite(BackwardLed, HIGH);
+        digitalWrite(systemLed, HIGH);
+      }
       if ( SuddenReverse == true);
       {
-        delay(2000);
         SuddenReverse = false;
       }
     }
@@ -712,15 +730,17 @@ void EmergencyStop()
   // STOP RIGHT NOW
   SpeedValue_Now = ZeroPWM;
   Step_For_Move = 0;
-  digitalWrite(Direction_Of_Move, LOW);
+  digitalWrite(Direction_Of_Move, LOW);   // оттормаживаем двигатели. ппадение под собственным весом
   digitalWrite(Permission_Of_Move, LOW);
   analogWrite(PWM_Pin, ZeroPWM);
   sei();
+  return;
 }
 
 void ADCread() {
   Current_1 = analogRead(ADCpin_Current1);
   Speed_1 = analogRead(ADCpin_Speed1);
+  BatteryCharge = analogRead(ADCpin_BatteryLvL);
   return;
 }
 
@@ -735,15 +755,15 @@ void setArrayForTelemetry() {
   //set values
   testArray [0] = CounterOfPacketsFromTx;
   testArray [1] = Speed_1;       // Speed_1L
-  testArray [2] = Speed_1 >> 8;  // Speed_1L
+  testArray [2] = Speed_1 >> 8;  // Speed_1H
   testArray [3] = Speed_2;
   testArray [4] = Speed_2 >> 8;
   testArray [5] = Current_1;
   testArray [6] = Current_1 >> 8;
   testArray [7] = Current_2;
   testArray [8] = Current_2 >> 8;
-  testArray [9] = 4;               // V_Roper L
-  testArray [10] = 0 >> 8;         // V_Roper_H
+  testArray [9] = BatteryCharge;               // V_Roper L
+  testArray [10] = BatteryCharge >> 8;         // V_Roper_H
   testArray [11] = abs(SpeedValue_Now); //PWM_value
   testArray [12] = Direction;      //Direction
   testArray [13] = Direction;
