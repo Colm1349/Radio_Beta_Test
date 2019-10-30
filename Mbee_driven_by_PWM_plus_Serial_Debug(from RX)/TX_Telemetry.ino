@@ -21,13 +21,15 @@
     4) При отсутствиии телеметрии больше 0.5-4 сек перезагружаться.
     5) Чтение АЦПхой уровня напряжения батареи (кроны) и рассчитать резисторы.
     6) Отображение светодиодом режима работы (проводное/беспроводное)
-    7) работа с дисплеем
+   +7) работа с дисплеем
 
 */
 
 
 #include <MBee.h>
 #include <SoftwareSerial.h>
+#include <LiquidCrystalRus.h>
+#include <stdio.h>
 
 #define DEBUG nss
 #define MBee_Serial Serial
@@ -48,6 +50,7 @@ uint8_t ssRX = 8;
 uint8_t ssTX = 9;
 SoftwareSerial nss(ssRX, ssTX);
 SerialStar mbee = SerialStar();
+LiquidCrystalRus disp(6, 7, 2, 3, 4, 5); // создаем объект
 
 //TX SETUP
 TxRequest tx = TxRequest(); //Пакет с данными для отправки удаленному модему. Для экономии памяти будем использовать один и тот же объект для отправки всех пакетов.
@@ -80,6 +83,8 @@ float I_2_A = 0;
 float Battery_Roper_Votlage = 0;
 float PWM_Value_Percent = 12.3;
 
+//Display stuff
+
 void setup()
 {
   pinMode(statusLed, OUTPUT);
@@ -89,11 +94,16 @@ void setup()
   pinMode(ForwardPin , INPUT);
   pinMode(BackwardPin, INPUT);
   pinMode(StopButtonPin, INPUT);
+  disp.begin(20, 4);  // инициализируем дисплей 4 строки по 20 символов
+  reset_textmode();
+  disp.clear();       // чистим дисплей
   DEBUG.begin(115200);
   MBee_Serial.begin(115200);
   mbee.begin(MBee_Serial);
   DEBUG.println("TX READY FOR your suffering!");
   tx.setRemoteAddress(remoteAddress); //Устанавливаем адрес удаленного модема.
+  // write const on the display
+  OLED_setup();
   delay(500); //Задержка не обязательна и вставлена для удобства работы с терминальной программой.
 }
 
@@ -209,6 +219,8 @@ void loop()
   }
   else
     DEBUG.println("---");
+
+  Display_Data();
   //  DEBUG.println("///////////////end of loop////////////");
 }
 
@@ -392,4 +404,395 @@ void Printing_Values_On_A_PC_Monitor()
   DEBUG.println();
   delay(30);
   return;
+}
+
+void Display_Data()
+{
+  //mute blink
+  disp.noBlink();
+  byte Triangle0[8] = {
+    0b11111,
+    0b01110,
+    0b00100,
+    0b00100,
+    0b00100,
+    0b00000,
+    0b00001,
+    0b00111
+  };
+
+  byte Triangle1[8] = {
+    0b00000,
+    0b00000,
+    0b00000,
+    0b00000,
+    0b00001,
+    0b00111,
+    0b11111,
+    0b11111
+  };
+
+  byte Triangle2[8] = {
+    0b00000,
+    0b00000,
+    0b00001,
+    0b00111,
+    0b11111,
+    0b11111,
+    0b11111,
+    0b11111
+  };
+
+  byte Triangle3[8] = {
+    0b00001,
+    0b00111,
+    0b11111,
+    0b11111,
+    0b11111,
+    0b11111,
+    0b11111,
+    0b11111
+  };
+
+  byte RC_Char[8] = {
+    0b01000,
+    0b01000,
+    0b11111,
+    0b10001,
+    0b10001,
+    0b11111,
+    0b11101,
+    0b11111
+  };
+  byte Roper[8] = {
+    0b11111,
+    0b11011,
+    0b10001,
+    0b00100,
+    0b10001,
+    0b11011,
+    0b11111,
+    0b11111
+  };
+
+  //Create Custom Sign
+  //  disp.createChar(0, crossInverted);
+  //  disp.createChar(1, cross);
+  disp.createChar(2, Roper);
+  disp.createChar(3, RC_Char);
+  disp.createChar(4, Triangle0);
+  disp.createChar(5, Triangle1);
+  disp.createChar(6, Triangle2);
+  disp.createChar(7, Triangle3);
+
+  //Telemetry Emulation
+  static int S1; //random(-101, 101);
+  static int S2;
+  static int CUR1;
+  static int CUR2;
+  static int Bat_Climb;
+  static int Bat_RC;
+  static int RSSI_LvL;
+  //  S1 = random(-110, 110); //random(-101, 101);
+  //  S2 = random(-120, 122);
+  //  CUR1 = random(-110, 110);
+  //  CUR2 = random(-120, 120);
+  //  Bat_Climb = random(0, 100);
+  //  Bat_RC = random(0, 100);
+  //  RSSI_LvL = random(200, 220);
+
+  S1 = 90;
+  S2 = 90;
+  CUR1 = 20;
+  CUR2 = 20;
+  Bat_Climb = 97;
+  Bat_RC = 100;
+  RSSI_LvL = 230;
+
+  int offset = 0;
+  int LvL = 0;
+  Calculate_Speed(&S1, &S2);
+  Calculate_Current(&CUR1, &CUR2);
+  Calculate_BatteryLevel(&Bat_Climb, &Bat_RC);
+
+  //RSSI processing
+  disp.setCursor(5, 0);
+  disp.print("   ");
+  //  disp.setCursor(5, 0);
+  //  disp.print(RSSI_LvL);
+  if (RSSI_LvL >= 0 & RSSI_LvL < 32)
+    LvL = 1;
+  if (RSSI_LvL >= 32 & RSSI_LvL < 64)
+    LvL = 2;
+  if (RSSI_LvL >= 64 & RSSI_LvL < 96)
+    LvL = 3;
+  if (RSSI_LvL >= 96 & RSSI_LvL < 128)
+    LvL = 4;
+  if (RSSI_LvL >= 128 & RSSI_LvL < 160)
+    LvL = 5;
+  if (RSSI_LvL >= 160 & RSSI_LvL < 192)
+    LvL = 6;
+  if (RSSI_LvL >= 192 & RSSI_LvL < 224)
+    LvL = 7;
+  if (RSSI_LvL >= 224 & RSSI_LvL < 255)
+    LvL = 8;
+
+  String buffer1 = "-100";
+  String buffer2 = "-200";
+  //Second line
+  buffer1 = Compiler_for_OLED (S1);
+  buffer2 = Compiler_for_OLED (S2);
+  disp.setCursor(5, 1);
+  disp.print(buffer1);
+  disp.setCursor(12, 1);
+  disp.print(buffer2);
+  //Third line
+  buffer1 = Compiler_for_OLED (CUR1);
+  buffer2 = Compiler_for_OLED (CUR2);
+  disp.setCursor(5, 2);
+  disp.print(buffer1);
+  disp.setCursor(12, 2);
+  disp.print(buffer2);
+  //Fourth line
+  buffer1 = Compiler_Battery_LvL_for_OLED(Bat_Climb);
+  buffer2 = Compiler_Battery_LvL_for_OLED(Bat_RC);
+  disp.setCursor(6, 3);
+  disp.print(buffer1);
+  disp.setCursor(13, 3);
+  disp.print(buffer2);
+  //  int minusVal = random (-100, 100);
+  //  String small = "-100";
+  RSSI_plot(LvL);
+  delay(1000);
+  return;
+}
+
+String Compiler_Battery_LvL_for_OLED(int input)
+{
+  String small = "100";
+  if (input >= 0)
+  {
+    small = String(input);
+    Serial.println("battery > 0");
+    Serial.println(small);
+    if (input >= 0 & input < 10)
+      small = "  " + String(input);
+    if (input >= 10 & input < 100)
+      small = " " + String(input);
+    if (input >= 100)
+      small = String(input);
+    //
+    Serial.println(small);
+    delay(1);
+    return small;
+  }
+  else
+  return "ERR";
+
+}
+
+String Compiler_for_OLED(int input)
+{
+  String small = "-100";
+  // compile the buffer
+  if (input < 0)
+  {
+    small = String(input);
+    Serial.println("input < 0");
+    //    Serial.println("We've destroyed this world / Darkness fills the sky");
+    Serial.println(small);
+    if (input < 0 & input > -10)
+      small = "  " + String(input);
+    if (input <= -10 & input > -100)
+      small = " " + String(input);
+    if (input <= -100)
+      small = String(input);
+    //
+    Serial.println(small);
+    delay(5);
+  }
+  else // minus val >= 0
+  {
+    small = String(input);
+    Serial.println("input > 0");
+    //    Serial.println("You don't know my misery!");
+    Serial.println(small);
+    if (input >= 0 & input < 10)
+      small = "   " + String(input);
+    if (input >= 10 & input < 100)
+      small = "  " + String(input);
+    if (input >= 100)
+      small = " " + String(input);
+    //
+    Serial.println(small);
+    delay(5);
+  }
+  return small;
+}
+
+void OLED_setup()
+{
+  //Zero line
+  //  disp.setCursor(0, 0);
+  //  disp.print("TEST");
+
+  //Second line
+  disp.setCursor(0, 1);
+  disp.print("SPD ");
+  disp.setCursor(9, 1);
+  disp.print("%");
+  disp.setCursor(16, 1);
+  disp.print("%");
+
+  //Third line
+  disp.setCursor(0, 2);
+  disp.print("LOAD");
+  disp.setCursor(9 , 2);
+  disp.print("%");
+  disp.setCursor(16 , 2);
+  disp.print("%");
+
+  //Fourth line
+  disp.setCursor(0, 3);
+  disp.print("BAT");
+  disp.setCursor(5, 3);
+  disp.write(byte(2));  //symbol Climber
+  disp.setCursor(9, 3);
+  disp.print("%");
+  disp.setCursor(12, 3);
+  disp.write(byte(3));  //symbol RC
+  disp.setCursor(16, 3);
+  disp.print("%");
+  return;
+}
+
+// Plot
+void RSSI_plot(int LvL)
+{
+  if (LvL == 1 )
+  {
+    disp.setCursor(16, 0);
+    disp.write(byte(4));
+    disp.print("   ");
+    disp.setCursor(16, 0);
+    //    disp.blink();
+  }
+  if (LvL == 2 )
+  {
+    disp.setCursor(16, 0);
+    disp.write(byte(4));
+    disp.print("   ");
+  }
+  if (LvL == 3 )
+  {
+    disp.setCursor(16, 0);
+    disp.write(byte(4));
+    disp.write(byte(5));
+    disp.print("  ");
+    disp.setCursor(17, 0);
+    //    disp.blink();
+  }
+  if (LvL == 4 )
+  {
+    disp.setCursor(16, 0);
+    disp.write(byte(4));
+    disp.write(byte(5));
+    disp.print("  ");
+  }
+  if (LvL == 5 )
+  {
+    disp.setCursor(16, 0);
+    disp.write(byte(4));
+    disp.write(byte(5));
+    disp.write(byte(6));
+    disp.print(" ");
+    disp.setCursor(18, 0);
+    //    disp.blink();
+  }
+  if (LvL == 6 )
+  {
+    disp.setCursor(16, 0);
+    disp.write(byte(4));
+    disp.write(byte(5));
+    disp.write(byte(6));
+    disp.print(" ");
+  }
+  if (LvL == 7 )
+  {
+    disp.setCursor(16, 0);
+    disp.write(byte(4));
+    disp.write(byte(5));
+    disp.write(byte(6));
+    disp.write(byte(7));
+    disp.setCursor(19, 0);
+    //    disp.blink();
+  }
+  if (LvL == 8 )
+  {
+    disp.setCursor(16, 0);
+    disp.write(byte(4));
+    disp.write(byte(5));
+    disp.write(byte(6));
+    disp.write(byte(7));
+  }
+  return;
+}
+
+void Calculate_Speed(int S1, int S2)
+{
+  S1 = random(50, 1000);
+  Serial.print("Random S1 ->");
+  Serial.println(S1);
+  S1 = map(S1, 50, 1000, -100, 100);
+  Serial.print("Speed 1 ->");
+  Serial.println(S1);
+  S2 = random(50, 1000);
+  Serial.print("Random S2 ->");
+  Serial.println(S2);
+  S2 = map(S2, 50, 1000, -100, 100);
+  Serial.print("Speed 2 ->");
+  Serial.println(S2);
+  return;
+}
+
+void Calculate_Current(int CUR1, int CUR2)
+{
+  CUR1 = random(50, 1000);
+  Serial.print("Random CUR1 ->");
+  Serial.println(CUR1);
+  CUR1 = map(CUR1, 50, 1000, -100, 100);
+  Serial.print("CUR 1 ->");
+  Serial.println(CUR1);
+  CUR2 = random(50, 1000);
+  Serial.print("Random CUR2 ->");
+  Serial.println(CUR2);
+  CUR2 = map(CUR2, 50, 1000, -100, 100);
+  Serial.print("CUR 2 ->");
+  Serial.println(CUR2);
+  return;
+}
+
+void Calculate_BatteryLevel(int Bat_Climb, int Bat_RC)
+{
+  Bat_Climb = random(50, 1000);
+  Serial.print("Random Batt Climb ->");
+  Serial.println(Bat_Climb);
+  Bat_Climb = map(Bat_Climb, 50, 1000, 0, 100);
+  Serial.print("Batt Climb ->");
+  Serial.println(Bat_Climb);
+  Bat_RC = random(50, 1000);
+  Serial.print("Random Bat Rc ->");
+  Serial.println(Bat_RC);
+  Bat_RC = map(Bat_RC, 50, 1000, 0, 100);
+  Serial.print("Bat_RC ->");
+  Serial.println(Bat_RC);
+  return;
+}
+
+void reset_textmode() //функция для установки графического режима
+{
+  disp.command(0x08);//выключили экран
+  disp.command(0x17);//переключение в текстовый режим
+  disp.command(0x01);//очистили от мусора ОЗУ
+  disp.command(0x04 | 0x08);//включили экран
 }
